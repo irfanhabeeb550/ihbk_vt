@@ -13,6 +13,9 @@ import com.habeeb.transcriberecorder.ui.DetailScreen
 import com.habeeb.transcriberecorder.ui.HomeScreen
 import com.habeeb.transcriberecorder.ui.RecordingScreen
 import com.habeeb.transcriberecorder.ui.TranscribeRecorderTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import androidx.lifecycle.lifecycleScope
 
 class MainActivity : ComponentActivity() {
 
@@ -37,7 +40,59 @@ class MainActivity : ComponentActivity() {
                         HomeScreen(
                             onRecordClick = { navController.navigate("record") },
                             onRecordingClick = { id -> navController.navigate("detail/$id") },
-                            onSettingsClick = { navController.navigate("settings") }
+                            onSettingsClick = { navController.navigate("settings") },
+                            onImportAudio = { uri ->
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    try {
+                                        val dir = java.io.File(filesDir, "recordings").apply { mkdirs() }
+                                        val fileName = "import_${System.currentTimeMillis()}.m4a"
+                                        val outputFile = java.io.File(dir, fileName)
+                                        
+                                        contentResolver.openInputStream(uri)?.use { input ->
+                                            outputFile.outputStream().use { output ->
+                                                input.copyTo(output)
+                                            }
+                                        }
+                                        
+                                        var title = "Imported Audio"
+                                        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                                            if (cursor.moveToFirst()) {
+                                                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                                if (nameIndex != -1) title = cursor.getString(nameIndex)
+                                            }
+                                        }
+                                        
+                                        val db = com.habeeb.transcriberecorder.data.AppDatabase.getInstance(applicationContext)
+                                        val recordingId = db.recordingDao().insert(
+                                            com.habeeb.transcriberecorder.data.Recording(
+                                                title = title,
+                                                filePath = outputFile.absolutePath,
+                                                timestamp = System.currentTimeMillis(),
+                                                duration = 0,
+                                                category = "Imported"
+                                            )
+                                        )
+                                        
+                                        val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.habeeb.transcriberecorder.recording.TranscriptionWorker>()
+                                            .setInputData(
+                                                androidx.work.workDataOf(
+                                                    "filePath" to outputFile.absolutePath,
+                                                    "recordingId" to recordingId,
+                                                    "category" to "Imported"
+                                                )
+                                            )
+                                            .setConstraints(
+                                                androidx.work.Constraints.Builder()
+                                                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                                                    .build()
+                                            )
+                                            .build()
+                                        androidx.work.WorkManager.getInstance(applicationContext).enqueue(workRequest)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                            }
                         )
                     }
                     composable("record") {

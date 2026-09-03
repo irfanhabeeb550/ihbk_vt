@@ -22,12 +22,17 @@ import java.util.*
 
 import androidx.compose.material.icons.filled.Settings
 
+import androidx.compose.material.icons.filled.Add
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onRecordClick: () -> Unit,
     onRecordingClick: (Long) -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onImportAudio: (android.net.Uri) -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -43,11 +48,20 @@ fun HomeScreen(
 
     LaunchedEffect(query) { reload() }
 
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            onImportAudio(uri)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Recordings") },
                 actions = {
+                    IconButton(onClick = { audioPicker.launch("audio/*") }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Import Audio")
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings")
                     }
@@ -78,7 +92,7 @@ fun HomeScreen(
                 LazyColumn {
                     items(recordings) { rec ->
                         RecordingRow(rec, onClick = { onRecordingClick(rec.id) })
-                        Divider()
+                        HorizontalDivider()
                     }
                 }
             }

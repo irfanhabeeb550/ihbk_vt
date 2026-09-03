@@ -46,7 +46,20 @@ fun DetailScreen(recordingId: Long, onBack: () -> Unit) {
             TopAppBar(
                 title = { Text(recording?.title ?: "Recording") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                },
+                actions = {
+                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                    IconButton(onClick = {
+                        val textToCopy = if (tab == 0) {
+                            lines.joinToString("\n") { "[${formatTimestamp(it.startTime)}] ${it.text}" }
+                        } else {
+                            recording?.summary ?: ""
+                        }
+                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(textToCopy))
+                    }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "Copy")
+                    }
                 }
             )
         }
@@ -103,7 +116,7 @@ private fun TranscriptTab(lines: List<TranscriptLine>, status: String, onLineCli
                 Text(formatTimestamp(line.startTime), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 Text(line.text, style = MaterialTheme.typography.bodyLarge)
             }
-            Divider()
+            HorizontalDivider()
         }
     }
 }
