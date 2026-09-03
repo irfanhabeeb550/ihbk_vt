@@ -51,53 +51,50 @@ class TranscriptionWorker(
 
             setForeground(createForegroundInfo("Transcribing 0/$totalChunks chunks…"))
 
-            // Process chunks in parallel (3 at a time) for speed
-            val semaphore = Semaphore(3)
-            var completedCount = 0
-            val completedLock = Any()
-
-            val results = coroutineScope {
-                chunks.mapIndexed { index, chunk ->
-                    async(Dispatchers.IO) {
-                        semaphore.withPermit {
-                            Log.d(TAG, "Transcribing chunk $index (${chunk.length() / 1024}KB)")
-                            var lastException: Exception? = null
-                            // Retry each chunk up to 3 times
-                            for (attempt in 1..3) {
-                                try {
-                                    val response = GroqApi.transcribeChunk(
-                                        BuildConfig.GROQ_API_KEY, chunk, vocabularyHints
-                                    )
-                                    Log.d(TAG, "Chunk $index done: ${response.segments.size} segments")
-                                    synchronized(completedLock) {
-                                        completedCount++
-                                        // Update notification progress
-                                        launch(Dispatchers.Main) {
-                                            try {
-                                                setForeground(createForegroundInfo(
-                                                    "Transcribing $completedCount/$totalChunks chunks…"
-                                                ))
-                                            } catch (_: Exception) {}
-                                        }
-                                    }
-                                    return@async IndexedResult(index, response.segments)
-                                } catch (e: Exception) {
-                                    lastException = e
-                                    Log.w(TAG, "Chunk $index attempt $attempt failed: ${e.message}")
-                                    if (attempt < 3) delay(3000L * attempt)
-                                }
-                            }
-                            throw lastException ?: Exception("Unknown error on chunk $index")
+            val results = mutableListOf<IndexedResult>()
+            for ((index, chunk) in chunks.withIndex()) {
+                Log.d(TAG, "Transcribing chunk $index (${chunk.length() / 1024}KB)")
+                var lastException: Exception? = null
+                
+                // Retry each chunk up to 4 times with exponential backoff for 429 Too Many Requests
+                for (attempt in 1..4) {
+                    try {
+                        setForeground(createForegroundInfo("Transcribing chunk ${index + 1}/$totalChunks…"))
+                        val response = GroqApi.transcribeChunk(
+                            BuildConfig.GROQ_API_KEY, chunk, vocabularyHints
+                        )
+                        Log.d(TAG, "Chunk $index done: ${response.segments.size} segments")
+                        results.add(IndexedResult(index, response.segments))
+                        
+                        // Stay under Groq's 20 requests per minute limit (approx 1 request every 3 seconds)
+                        if (index < chunks.size - 1) delay(3500) 
+                        lastException = null
+                        break
+                    } catch (e: Exception) {
+                        lastException = e
+                        val msg = e.message ?: ""
+                        Log.w(TAG, "Chunk $index attempt $attempt failed: $msg")
+                        
+                        // If it's a rate limit (429), wait much longer
+                        if (msg.contains("429") || msg.contains("Too Many Requests")) {
+                            Log.w(TAG, "Hit rate limit, backing off for 30 seconds...")
+                            delay(30_000L)
+                        } else if (attempt < 4) {
+                            delay(5000L * attempt)
                         }
                     }
-                }.awaitAll()
+                }
+                
+                if (lastException != null) {
+                    throw lastException
+                }
             }
 
             setForeground(createForegroundInfo("Stitching transcript…"))
 
             // Stitch results back in order
             val allLines = mutableListOf<TranscriptLine>()
-            results.sortedBy { it.chunkIndex }.forEach { result ->
+            results.forEach { result ->
                 val timeOffset = result.chunkIndex * CHUNK_DURATION_SECONDS
                 result.segments.forEach { seg ->
                     allLines.add(
@@ -127,9 +124,17 @@ class TranscriptionWorker(
             if (chunks.size > 1) chunks.forEach { it.delete() }
             Result.success()
         } catch (e: Exception) {
-            Log.e(TAG, "Transcription failed: ${e.message}", e)
-            db.recordingDao().updateStatus(recordingId, "FAILED")
-            Result.retry()
+            val msg = e.message ?: "Unknown error"
+            Log.e(TAG, "Transcription failed: $msg", e)
+            
+            // If it's a hard error (like file too large), don't retry.
+            if (msg.contains("too large") || runAttemptCount > 3) {
+                db.recordingDao().updateStatus(recordingId, "FAILED: $msg")
+                return Result.failure()
+            } else {
+                db.recordingDao().updateStatus(recordingId, "FAILED (Retrying...)")
+                return Result.retry()
+            }
         }
     }
 
@@ -242,6 +247,9 @@ class TranscriptionWorker(
             // Clean up any partial chunks
             chunks.forEach { it.delete() }
             outputDir.delete()
+            if (inputFile.length() > MAX_SINGLE_FILE_BYTES) {
+                throw Exception("File is too large (${inputFile.length() / 1024 / 1024}MB) and format cannot be chunked. Please use M4A or keep under 20MB.")
+            }
             return listOf(inputFile)
         } finally {
             extractor.release()

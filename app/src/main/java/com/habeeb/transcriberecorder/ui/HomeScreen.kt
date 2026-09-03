@@ -157,10 +157,10 @@ private fun RecordingRow(recording: Recording, onClick: () -> Unit, onDelete: ()
 
 @Composable
 private fun StatusBadge(status: String) {
-    val (label, color) = when (status) {
-        "DONE" -> "Transcribed" to Color(0xFF2E7D32)
-        "IN_PROGRESS" -> "Transcribing…" to Color(0xFFF9A825)
-        "FAILED" -> "Retry pending" to Color(0xFFC62828)
+    val (label, color) = when {
+        status == "DONE" -> "Transcribed" to Color(0xFF2E7D32)
+        status == "IN_PROGRESS" -> "Transcribing…" to Color(0xFFF9A825)
+        status.startsWith("FAILED") -> status to Color(0xFFC62828)
         else -> "Queued" to Color.Gray
     }
     Text(label, style = MaterialTheme.typography.labelSmall, color = color)
