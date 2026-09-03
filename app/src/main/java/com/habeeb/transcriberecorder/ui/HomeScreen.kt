@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,7 +22,6 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 import androidx.compose.material.icons.filled.Settings
-
 import androidx.compose.material.icons.filled.Add
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +38,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     var recordings by remember { mutableStateOf<List<Recording>>(emptyList()) }
     var query by remember { mutableStateOf("") }
+    var showDeleteDialog by remember { mutableStateOf<Recording?>(null) }
 
     fun reload() {
         scope.launch {
@@ -52,6 +53,35 @@ fun HomeScreen(
         if (uri != null) {
             onImportAudio(uri)
         }
+    }
+
+    // Delete confirmation dialog
+    showDeleteDialog?.let { rec ->
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = null },
+            title = { Text("Delete Recording") },
+            text = { Text("Delete \"${rec.title}\"? The audio file and transcript will be permanently removed.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        val db = AppDatabase.getInstance(context)
+                        // Delete audio file from storage
+                        try { java.io.File(rec.filePath).delete() } catch (_: Exception) {}
+                        // Delete from database (transcript_lines cascade-deleted via ForeignKey)
+                        db.recordingDao().deleteById(rec.id)
+                        showDeleteDialog = null
+                        reload()
+                    }
+                }) {
+                    Text("Delete", color = Color(0xFFC62828))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -91,7 +121,11 @@ fun HomeScreen(
             } else {
                 LazyColumn {
                     items(recordings) { rec ->
-                        RecordingRow(rec, onClick = { onRecordingClick(rec.id) })
+                        RecordingRow(
+                            recording = rec,
+                            onClick = { onRecordingClick(rec.id) },
+                            onDelete = { showDeleteDialog = rec }
+                        )
                         HorizontalDivider()
                     }
                 }
@@ -101,12 +135,12 @@ fun HomeScreen(
 }
 
 @Composable
-private fun RecordingRow(recording: Recording, onClick: () -> Unit) {
+private fun RecordingRow(recording: Recording, onClick: () -> Unit, onDelete: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(16.dp),
+            .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
@@ -119,6 +153,9 @@ private fun RecordingRow(recording: Recording, onClick: () -> Unit) {
             )
         }
         StatusBadge(recording.transcriptionStatus)
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFC62828))
+        }
     }
 }
 

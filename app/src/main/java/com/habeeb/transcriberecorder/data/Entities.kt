@@ -62,6 +62,9 @@ interface RecordingDao {
 
     @Query("SELECT * FROM recordings WHERE transcript LIKE '%' || :query || '%' ORDER BY timestamp DESC")
     suspend fun search(query: String): List<Recording>
+
+    @Query("DELETE FROM recordings WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }
 
 @Dao

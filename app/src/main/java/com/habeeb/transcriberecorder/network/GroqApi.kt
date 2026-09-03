@@ -3,6 +3,7 @@ package com.habeeb.transcriberecorder.network
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.android.*
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
@@ -27,11 +28,17 @@ object GroqApi {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
         }
+        install(HttpTimeout) {
+            requestTimeoutMillis = 5 * 60 * 1000   // 5 minutes per request
+            connectTimeoutMillis = 30_000            // 30 seconds to connect
+            socketTimeoutMillis = 3 * 60 * 1000     // 3 minutes socket idle
+        }
+        engine {
+            connectTimeout = 30_000
+            socketTimeout = 3 * 60 * 1000
+        }
     }
 
-    /** Transcribes one audio chunk. vocabularyHints is a short comma-separated string of
-     *  proper nouns / jargon the user expects (professor name, topic terms), passed as
-     *  Whisper's "prompt" to bias recognition. */
     suspend fun transcribeChunk(
         apiKey: String,
         chunk: File,
@@ -62,7 +69,6 @@ object GroqApi {
     @Serializable
     private data class ChatResponse(val choices: List<ChatChoice>)
 
-    /** Sends the stitched transcript to Groq's Llama model for a class/meeting-style summary. */
     suspend fun summarize(apiKey: String, transcript: String, category: String): String {
         val prompt = "The following is a transcript of a $category recording. " +
             "Give a concise summary, a list of key terms defined, and 5-7 bulleted takeaways. " +
