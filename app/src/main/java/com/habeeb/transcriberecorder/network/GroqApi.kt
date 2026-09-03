@@ -48,7 +48,7 @@ object GroqApi {
             url = "https://api.groq.com/openai/v1/audio/transcriptions",
             formData = formData {
                 append("file", chunk.readBytes(), Headers.build {
-                    append(HttpHeaders.ContentDisposition, "filename=${chunk.name}")
+                    append(HttpHeaders.ContentDisposition, "filename=\"${chunk.name}\"")
                 })
                 append("model", "whisper-large-v3")
                 append("response_format", "verbose_json")

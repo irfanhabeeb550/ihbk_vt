@@ -132,7 +132,7 @@ class TranscriptionWorker(
                 db.recordingDao().updateStatus(recordingId, "FAILED: $msg")
                 return Result.failure()
             } else {
-                db.recordingDao().updateStatus(recordingId, "FAILED (Retrying...)")
+                db.recordingDao().updateStatus(recordingId, "FAILED: $msg (Retrying...)")
                 return Result.retry()
             }
         }
