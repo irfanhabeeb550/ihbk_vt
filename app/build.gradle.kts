@@ -22,7 +22,8 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0-mvp"
-        buildConfigField("String", "GROQ_API_KEY", "\"${localProps.getProperty("GROQ_API_KEY", "")}\"")
+        val groqKey = localProps.getProperty("GROQ_API_KEY", "").trim().removeSurrounding("\"")
+        buildConfigField("String", "GROQ_API_KEY", "\"$groqKey\"")
     }
 
     buildFeatures {
