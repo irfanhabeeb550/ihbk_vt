@@ -1,12 +1,18 @@
 package com.habeeb.transcriberecorder.recording
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.media.MediaExtractor
 import android.media.MediaMuxer
+import android.os.Build
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.habeeb.transcriberecorder.BuildConfig
+import com.habeeb.transcriberecorder.R
 import com.habeeb.transcriberecorder.data.AppDatabase
 import com.habeeb.transcriberecorder.data.TranscriptLine
 import com.habeeb.transcriberecorder.network.GroqApi
@@ -17,6 +23,8 @@ import java.io.File
 import java.nio.ByteBuffer
 
 private const val TAG = "TranscriptionWorker"
+private const val NOTIF_CHANNEL = "transcription_channel"
+private const val NOTIF_ID = 2
 
 class TranscriptionWorker(
     context: Context,
@@ -29,16 +37,25 @@ class TranscriptionWorker(
         val category = inputData.getString("category") ?: "General"
         if (recordingId == -1L) return Result.failure()
 
+        // Run as a foreground service so Android doesn't kill us during long transcriptions
+        setForeground(createForegroundInfo("Preparing transcription…"))
+
         val db = AppDatabase.getInstance(applicationContext)
         db.recordingDao().updateStatus(recordingId, "IN_PROGRESS")
 
         return try {
             val vocabularyHints = SettingsStore.getVocabularyHints(applicationContext)
             val chunks = chunkAudioIfNeeded(filePath)
-            Log.d(TAG, "Split into ${chunks.size} chunk(s)")
+            val totalChunks = chunks.size
+            Log.d(TAG, "Split into $totalChunks chunk(s)")
+
+            setForeground(createForegroundInfo("Transcribing 0/$totalChunks chunks…"))
 
             // Process chunks in parallel (3 at a time) for speed
             val semaphore = Semaphore(3)
+            var completedCount = 0
+            val completedLock = Any()
+
             val results = coroutineScope {
                 chunks.mapIndexed { index, chunk ->
                     async(Dispatchers.IO) {
@@ -52,11 +69,22 @@ class TranscriptionWorker(
                                         BuildConfig.GROQ_API_KEY, chunk, vocabularyHints
                                     )
                                     Log.d(TAG, "Chunk $index done: ${response.segments.size} segments")
+                                    synchronized(completedLock) {
+                                        completedCount++
+                                        // Update notification progress
+                                        launch(Dispatchers.Main) {
+                                            try {
+                                                setForeground(createForegroundInfo(
+                                                    "Transcribing $completedCount/$totalChunks chunks…"
+                                                ))
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
                                     return@async IndexedResult(index, response.segments)
                                 } catch (e: Exception) {
                                     lastException = e
                                     Log.w(TAG, "Chunk $index attempt $attempt failed: ${e.message}")
-                                    if (attempt < 3) delay(2000L * attempt)
+                                    if (attempt < 3) delay(3000L * attempt)
                                 }
                             }
                             throw lastException ?: Exception("Unknown error on chunk $index")
@@ -64,6 +92,8 @@ class TranscriptionWorker(
                     }
                 }.awaitAll()
             }
+
+            setForeground(createForegroundInfo("Stitching transcript…"))
 
             // Stitch results back in order
             val allLines = mutableListOf<TranscriptLine>()
@@ -86,6 +116,7 @@ class TranscriptionWorker(
             db.recordingDao().updateTranscript(recordingId, fullText)
 
             // Best-effort summary
+            setForeground(createForegroundInfo("Generating summary…"))
             try {
                 val summary = GroqApi.summarize(BuildConfig.GROQ_API_KEY, fullText, category)
                 db.recordingDao().updateSummary(recordingId, summary)
@@ -102,6 +133,25 @@ class TranscriptionWorker(
         }
     }
 
+    private fun createForegroundInfo(progress: String): ForegroundInfo {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIF_CHANNEL, "Transcription", NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = applicationContext.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(applicationContext, NOTIF_CHANNEL)
+            .setContentTitle("Transcribe Recorder")
+            .setContentText(progress)
+            .setSmallIcon(R.drawable.ic_mic)
+            .setOngoing(true)
+            .build()
+
+        return ForegroundInfo(NOTIF_ID, notification)
+    }
+
     private data class IndexedResult(
         val chunkIndex: Int,
         val segments: List<com.habeeb.transcriberecorder.network.GroqSegment>
@@ -113,9 +163,12 @@ class TranscriptionWorker(
      */
     private fun chunkAudioIfNeeded(filePath: String): List<File> {
         val inputFile = File(filePath)
-        if (inputFile.length() < MAX_SINGLE_FILE_BYTES) return listOf(inputFile)
+        if (inputFile.length() < MAX_SINGLE_FILE_BYTES) {
+            Log.d(TAG, "File ${inputFile.length() / 1024}KB is under threshold, no chunking needed")
+            return listOf(inputFile)
+        }
 
-        val outputDir = File(applicationContext.cacheDir, "chunks").apply { mkdirs() }
+        val outputDir = File(applicationContext.cacheDir, "chunks_${System.currentTimeMillis()}").apply { mkdirs() }
         val chunks = mutableListOf<File>()
         val chunkDurationUs = (CHUNK_DURATION_SECONDS * 1_000_000).toLong()
 
@@ -132,13 +185,14 @@ class TranscriptionWorker(
 
             extractor.selectTrack(trackIndex)
             val format = extractor.getTrackFormat(trackIndex)
+            Log.d(TAG, "Audio format: $format")
 
             var chunkIndex = 0
             var chunkStartUs = 0L
             var done = false
 
             while (!done) {
-                val chunkFile = File(outputDir, "chunk_${System.currentTimeMillis()}_${String.format("%03d", chunkIndex)}.m4a")
+                val chunkFile = File(outputDir, "chunk_${String.format("%03d", chunkIndex)}.m4a")
                 val muxer = MediaMuxer(chunkFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
                 val muxerTrack = muxer.addTrack(format)
                 muxer.start()
@@ -172,7 +226,7 @@ class TranscriptionWorker(
 
                 if (samplesInChunk > 0) {
                     chunks.add(chunkFile)
-                    Log.d(TAG, "Created chunk $chunkIndex: ${chunkFile.length() / 1024}KB")
+                    Log.d(TAG, "Created chunk $chunkIndex: ${chunkFile.length() / 1024}KB, $samplesInChunk samples")
                 } else {
                     chunkFile.delete()
                 }
@@ -181,9 +235,10 @@ class TranscriptionWorker(
                 chunkStartUs += chunkDurationUs
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Chunking failed, sending full file: ${e.message}", e)
+            Log.e(TAG, "Chunking failed: ${e.message}", e)
             // Clean up any partial chunks
             chunks.forEach { it.delete() }
+            outputDir.delete()
             return listOf(inputFile)
         } finally {
             extractor.release()
@@ -193,8 +248,8 @@ class TranscriptionWorker(
     }
 
     companion object {
-        const val CHUNK_DURATION_SECONDS = 300.0   // 5-minute chunks for faster parallel uploads
-        const val MAX_SINGLE_FILE_BYTES = 20L * 1024 * 1024 // 20MB threshold (safe margin under 25MB)
+        const val CHUNK_DURATION_SECONDS = 300.0   // 5-minute chunks
+        const val MAX_SINGLE_FILE_BYTES = 20L * 1024 * 1024 // 20MB threshold
     }
 }
 
