@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.collectLatest
 
 private val categories = listOf("Class", "Meeting", "Interview", "General")
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingScreen(onDone: () -> Unit) {
     val context = LocalContext.current
