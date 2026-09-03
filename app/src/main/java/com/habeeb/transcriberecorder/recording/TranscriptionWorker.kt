@@ -1,15 +1,17 @@
 package com.habeeb.transcriberecorder.recording
 
 import android.content.Context
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.arthenica.ffmpegkit.FFmpegKit
 import com.habeeb.transcriberecorder.BuildConfig
 import com.habeeb.transcriberecorder.data.AppDatabase
 import com.habeeb.transcriberecorder.data.TranscriptLine
 import com.habeeb.transcriberecorder.network.GroqApi
 import kotlinx.coroutines.delay
 import java.io.File
+import java.nio.ByteBuffer
 
 class TranscriptionWorker(
     context: Context,
@@ -66,18 +68,74 @@ class TranscriptionWorker(
         }
     }
 
-    /** Splits into 10-minute chunks without re-encoding, since Groq's free tier caps file size. */
+    /**
+     * Splits into 10-minute chunks using Android's MediaExtractor/MediaMuxer,
+     * since Groq's free tier caps file size at 25MB.
+     */
     private fun chunkAudioIfNeeded(filePath: String): List<File> {
         val inputFile = File(filePath)
         if (inputFile.length() < MAX_SINGLE_FILE_BYTES) return listOf(inputFile)
 
         val outputDir = inputFile.parentFile ?: return listOf(inputFile)
-        val pattern = File(outputDir, "${inputFile.nameWithoutExtension}_chunk_%03d.m4a").absolutePath
-        val command = "-i ${inputFile.absolutePath} -f segment -segment_time ${CHUNK_DURATION_SECONDS.toInt()} -c copy $pattern"
-        FFmpegKit.execute(command)
+        val chunks = mutableListOf<File>()
+        val chunkDurationUs = (CHUNK_DURATION_SECONDS * 1_000_000).toLong()
 
-        val chunks = outputDir.listFiles { f -> f.name.contains("_chunk_") }?.sortedBy { it.name }
-        return if (chunks.isNullOrEmpty()) listOf(inputFile) else chunks
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(filePath)
+            val trackIndex = (0 until extractor.trackCount).firstOrNull { i ->
+                extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)
+                    ?.startsWith("audio/") == true
+            } ?: return listOf(inputFile)
+
+            extractor.selectTrack(trackIndex)
+            val format = extractor.getTrackFormat(trackIndex)
+
+            var chunkIndex = 0
+            var chunkStartUs = 0L
+            var done = false
+
+            while (!done) {
+                val chunkFile = File(outputDir, "${inputFile.nameWithoutExtension}_chunk_${String.format("%03d", chunkIndex)}.m4a")
+                val muxer = MediaMuxer(chunkFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                val muxerTrack = muxer.addTrack(format)
+                muxer.start()
+
+                val buffer = ByteBuffer.allocate(1024 * 1024)
+                val bufferInfo = android.media.MediaCodec.BufferInfo()
+
+                while (true) {
+                    val sampleSize = extractor.readSampleData(buffer, 0)
+                    if (sampleSize < 0) {
+                        done = true
+                        break
+                    }
+                    val sampleTime = extractor.sampleTime
+                    if (sampleTime >= chunkStartUs + chunkDurationUs) {
+                        break
+                    }
+
+                    bufferInfo.offset = 0
+                    bufferInfo.size = sampleSize
+                    bufferInfo.presentationTimeUs = sampleTime - chunkStartUs
+                    bufferInfo.flags = extractor.sampleFlags
+                    muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
+                    extractor.advance()
+                }
+
+                muxer.stop()
+                muxer.release()
+                chunks.add(chunkFile)
+                chunkIndex++
+                chunkStartUs += chunkDurationUs
+            }
+        } catch (e: Exception) {
+            return listOf(inputFile) // fall back to un-chunked
+        } finally {
+            extractor.release()
+        }
+
+        return if (chunks.isEmpty()) listOf(inputFile) else chunks
     }
 
     companion object {

@@ -82,6 +82,6 @@ dependencies {
     // Media playback
     implementation("androidx.media3:media3-exoplayer:1.3.1")
 
-    // Audio chunking for long recordings
-    implementation("com.arthenica:ffmpeg-kit-audio:6.0-2")
+    // Audio chunking for long recordings (uses Android's built-in MediaExtractor/MediaMuxer)
+    // No external dependency needed
 }
