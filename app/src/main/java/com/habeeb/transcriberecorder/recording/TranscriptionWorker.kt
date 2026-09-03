@@ -149,6 +149,9 @@ class TranscriptionWorker(
             .setOngoing(true)
             .build()
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return ForegroundInfo(NOTIF_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        }
         return ForegroundInfo(NOTIF_ID, notification)
     }
 
