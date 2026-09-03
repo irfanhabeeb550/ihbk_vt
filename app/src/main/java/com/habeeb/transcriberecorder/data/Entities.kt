@@ -43,7 +43,7 @@ interface RecordingDao {
     suspend fun update(recording: Recording)
 
     @Query("SELECT * FROM recordings ORDER BY timestamp DESC")
-    suspend fun getAll(): List<Recording>
+    fun getAllFlow(): kotlinx.coroutines.flow.Flow<List<Recording>>
 
     @Query("SELECT * FROM recordings WHERE category = :category ORDER BY timestamp DESC")
     suspend fun getByCategory(category: String): List<Recording>
@@ -61,7 +61,7 @@ interface RecordingDao {
     suspend fun updateStatus(id: Long, status: String)
 
     @Query("SELECT * FROM recordings WHERE transcript LIKE '%' || :query || '%' ORDER BY timestamp DESC")
-    suspend fun search(query: String): List<Recording>
+    fun searchFlow(query: String): kotlinx.coroutines.flow.Flow<List<Recording>>
 
     @Query("DELETE FROM recordings WHERE id = :id")
     suspend fun deleteById(id: Long)

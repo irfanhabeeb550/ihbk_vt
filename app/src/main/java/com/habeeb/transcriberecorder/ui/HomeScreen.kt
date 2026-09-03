@@ -17,7 +17,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.habeeb.transcriberecorder.data.AppDatabase
 import com.habeeb.transcriberecorder.data.Recording
-import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -25,6 +24,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,18 +36,14 @@ fun HomeScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var recordings by remember { mutableStateOf<List<Recording>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf<Recording?>(null) }
 
-    fun reload() {
-        scope.launch {
-            val dao = AppDatabase.getInstance(context).recordingDao()
-            recordings = if (query.isBlank()) dao.getAll() else dao.search(query)
-        }
-    }
-
-    LaunchedEffect(query) { reload() }
+    // Auto-refreshing: Room Flow emits new data whenever the table changes
+    val dao = remember { AppDatabase.getInstance(context).recordingDao() }
+    val recordings by remember(query) {
+        if (query.isBlank()) dao.getAllFlow() else dao.searchFlow(query)
+    }.collectAsState(initial = emptyList())
 
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -70,7 +66,7 @@ fun HomeScreen(
                         // Delete from database (transcript_lines cascade-deleted via ForeignKey)
                         db.recordingDao().deleteById(rec.id)
                         showDeleteDialog = null
-                        reload()
+                        // No need to reload - Flow will automatically emit updated list
                     }
                 }) {
                     Text("Delete", color = Color(0xFFC62828))
