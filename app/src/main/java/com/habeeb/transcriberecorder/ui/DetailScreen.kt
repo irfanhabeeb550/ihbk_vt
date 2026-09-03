@@ -46,7 +46,7 @@ fun DetailScreen(recordingId: Long, onBack: () -> Unit) {
             TopAppBar(
                 title = { Text(recording?.title ?: "Recording") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                    IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, contentDescription = "Back") }
                 },
                 actions = {
                     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
