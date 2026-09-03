@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+import androidx.compose.material.icons.filled.Settings
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -47,7 +49,7 @@ fun HomeScreen(
                 title = { Text("Recordings") },
                 actions = {
                     IconButton(onClick = onSettingsClick) {
-                        Icon(androidx.compose.material.icons.Icons.Filled.Settings, contentDescription = "Settings")
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
                     }
                 }
             )
