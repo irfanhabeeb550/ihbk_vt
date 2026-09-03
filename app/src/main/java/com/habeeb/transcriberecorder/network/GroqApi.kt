@@ -18,7 +18,7 @@ data class GroqSegment(val start: Double, val end: Double, val text: String)
 
 @Serializable
 data class GroqTranscriptionResponse(
-    val text: String,
+    val text: String = "",
     val segments: List<GroqSegment> = emptyList()
 )
 
